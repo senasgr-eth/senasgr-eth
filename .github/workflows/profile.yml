@@ -1,0 +1,70 @@
+name: Refresh contribution board
+
+# This repo is deliberately kept at exactly ONE commit. Instead of appending a
+# "daily commit", the job amends the existing commit and force-pushes, so the
+# history never grows. Only generated files are staged; if the calendar has not
+# moved there is no diff and the job exits without touching the branch.
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "assets/**"
+      - "tools/**"
+      - "requirements.txt"
+      - ".github/workflows/profile.yml"
+
+permissions:
+  contents: write
+
+# A scheduled run and a manual run must not race on the same branch.
+concurrency:
+  group: contribution-board
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clone repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Fetch contribution calendar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROFILE_LOGIN: senasgr-eth
+        run: python tools/fetch_calendar.py
+
+      - name: Build the card
+        run: python tools/build_card.py
+
+      - name: Build the boards
+        run: python tools/build_board.py
+
+      - name: Amend the single commit
+        run: |
+          if git diff --quiet -- card_light.svg card_dark.svg board_light.svg board_dark.svg cache/calendar.json; then
+            echo "Nothing to refresh."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add card_light.svg card_dark.svg board_light.svg board_dark.svg cache/calendar.json
+          git commit --amend --no-edit
+          # --force-with-lease is the safety net: if a human pushed while this
+          # job was running, the push is rejected instead of wiping that work.
+          git push --force-with-lease origin main
